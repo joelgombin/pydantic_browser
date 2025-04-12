@@ -1,0 +1,613 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pydantic JSON Schema Generator</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/codemirror.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/theme/dracula.min.css" rel="stylesheet">
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        
+        h1 {
+            color: #2c3e50;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        
+        .container {
+            display: flex;
+            gap: 20px;
+            height: calc(100vh - 150px);
+            margin-bottom: 20px;
+        }
+        
+        .panel {
+            flex: 1;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        
+        .panel-header {
+            background-color: #2c3e50;
+            color: white;
+            padding: 10px 15px;
+            font-weight: bold;
+            border-top-left-radius: 8px;
+            border-top-right-radius: 8px;
+        }
+        
+        .CodeMirror {
+            height: 100%;
+            font-size: 14px;
+        }
+        
+        .controls {
+            padding: 10px;
+            text-align: center;
+            background-color: #f5f5f5;
+            border-top: 1px solid #ddd;
+        }
+        
+        button {
+            background-color: #3498db;
+            color: white;
+            border: none;
+            padding: 8px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background-color 0.3s;
+        }
+        
+        button:hover {
+            background-color: #2980b9;
+        }
+        
+        button:disabled {
+            background-color: #95a5a6;
+            cursor: not-allowed;
+        }
+        
+        #status {
+            margin-top: 10px;
+            padding: 10px;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        
+        .loading {
+            background-color: #f39c12;
+            color: white;
+        }
+        
+        .success {
+            background-color: #2ecc71;
+            color: white;
+        }
+        
+        .error {
+            background-color: #e74c3c;
+            color: white;
+        }
+        
+        .hidden {
+            display: none;
+        }
+        
+        #examples {
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        
+        select {
+            padding: 8px;
+            border-radius: 4px;
+            border: 1px solid #ddd;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Pydantic JSON Schema Generator</h1>
+    
+    <div id="examples">
+        <label for="example-select">Exemples : </label>
+        <select id="example-select">
+            <option value="">Choisir un exemple...</option>
+            <option value="simple">Modèle simple</option>
+            <option value="nested">Modèle imbriqué</option>
+            <option value="complex">Modèle complexe</option>
+        </select>
+    </div>
+    
+    <div class="container" style="height: calc(40vh - 80px);">
+        <div class="panel">
+            <div class="panel-header">Modèle Pydantic</div>
+            <textarea id="input-editor"></textarea>
+        </div>
+        <div class="panel">
+            <div class="panel-header">JSON Schema</div>
+            <textarea id="output-editor"></textarea>
+        </div>
+    </div>
+    
+    <div class="container" style="height: calc(30vh - 50px);">
+        <div class="panel" style="width: 100%;">
+            <div class="panel-header">
+                Exemple d'instance JSON
+                <select id="model-select" style="float: right; margin-top: -5px; background-color: #34495e; color: white; border: 1px solid #2c3e50; padding: 4px; border-radius: 4px;">
+                    <option value="">Choisir un modèle...</option>
+                </select>
+            </div>
+            <textarea id="example-editor"></textarea>
+        </div>
+    </div>
+    
+    <div class="controls">
+        <button id="generate-btn">Générer le JSON Schema</button>
+        <div id="status" class="hidden"></div>
+    </div>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/codemirror.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/mode/python/python.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/mode/javascript/javascript.min.js"></script>
+    <script>
+        // Préchargement de Pyodide au démarrage de la page
+        let pyodideReadyPromise = (async function() {
+            try {
+                // Ajouter un indicateur de chargement initial
+                const status = document.getElementById("status");
+                status.textContent = "Chargement initial de Pyodide...";
+                status.className = "loading";
+                status.classList.remove("hidden");
+                
+                // Charger le script Pyodide
+                await new Promise((resolve, reject) => {
+                    const pyodideScript = document.createElement("script");
+                    pyodideScript.src = "https://cdn.jsdelivr.net/pyodide/v0.23.4/full/pyodide.js";
+                    pyodideScript.onload = resolve;
+                    pyodideScript.onerror = reject;
+                    document.head.appendChild(pyodideScript);
+                });
+                
+                // Initialiser Pyodide
+                status.textContent = "Initialisation de Pyodide...";
+                window.pyodide = await loadPyodide();
+                
+                // Installer les packages requis
+                status.textContent = "Installation des bibliothèques Python...";
+                await window.pyodide.loadPackage("micropip");
+                await window.pyodide.runPythonAsync(`
+                    import micropip
+                    await micropip.install('pydantic')
+                    await micropip.install('email-validator')
+                `);
+                
+                status.textContent = "Prêt !";
+                status.className = "success";
+                setTimeout(() => {
+                    if (status.textContent === "Prêt !") {
+                        status.classList.add("hidden");
+                    }
+                }, 3000);
+                
+                return true;
+            } catch (error) {
+                console.error("Erreur lors du préchargement de Pyodide:", error);
+                return false;
+            }
+        })();
+        
+        // Initialiser les éditeurs CodeMirror
+        const inputEditor = CodeMirror.fromTextArea(document.getElementById("input-editor"), {
+            mode: "python",
+            theme: "dracula",
+            lineNumbers: true,
+            indentUnit: 4,
+            autoCloseBrackets: true,
+            matchBrackets: true
+        });
+        
+        const outputEditor = CodeMirror.fromTextArea(document.getElementById("output-editor"), {
+            mode: { name: "javascript", json: true },
+            theme: "dracula",
+            lineNumbers: true,
+            readOnly: true
+        });
+        
+        const exampleEditor = CodeMirror.fromTextArea(document.getElementById("example-editor"), {
+            mode: { name: "javascript", json: true },
+            theme: "dracula",
+            lineNumbers: true,
+            readOnly: true
+        });
+        
+        // Exemples de modèles Pydantic
+        const examples = {
+            simple: `from pydantic import BaseModel, Field
+from typing import Optional, List
+
+class User(BaseModel):
+    id: int
+    name: str = Field(min_length=1, max_length=100)
+    email: str
+    is_active: bool = True
+    age: Optional[int] = None
+`,
+            nested: `from pydantic import BaseModel, Field
+from typing import List, Optional
+from datetime import datetime
+
+class Address(BaseModel):
+    street: str
+    city: str
+    country: str
+    postal_code: str
+
+class User(BaseModel):
+    id: int
+    name: str
+    email: str
+    addresses: List[Address]
+    created_at: datetime
+`,
+            complex: `from pydantic import BaseModel, Field, constr, conint
+from typing import List, Dict, Optional, Union, Any
+from enum import Enum
+from datetime import datetime, date
+from uuid import UUID
+
+class Role(str, Enum):
+    ADMIN = "admin"
+    USER = "user"
+    GUEST = "guest"
+
+class Address(BaseModel):
+    street: str = Field(..., min_length=1, max_length=100)
+    city: str
+    country: str
+    postal_code: str
+    is_primary: bool = False
+
+class Tag(BaseModel):
+    name: str
+    value: Union[str, int, bool]
+
+class User(BaseModel):
+    id: UUID
+    username: constr(min_length=3, max_length=50)
+    email: str = Field(..., description="Email address")
+    password: str = Field(..., exclude=True)
+    age: conint(ge=18, lt=120)
+    is_active: bool = True
+    role: Role = Role.USER
+    tags: List[Tag] = []
+    addresses: List[Address] = []
+    preferences: Dict[str, Any] = {}
+    last_login: Optional[datetime] = None
+    birth_date: Optional[date] = None
+    
+    class Config:
+        schema_extra = {
+            "example": {
+                "username": "johndoe",
+                "email": "john@example.com",
+                "role": "user"
+            }
+        }
+`
+        };
+        
+        // Variable globale pour stocker les exemples disponibles
+        let currentExamples = {};
+        
+        // Fonction pour mettre à jour l'affichage de l'exemple
+        function updateExampleDisplay(modelName) {
+            if (!modelName || !currentExamples[modelName]) {
+                exampleEditor.setValue(JSON.stringify({message: "Aucun exemple disponible pour ce modèle"}, null, 2));
+                return;
+            }
+            
+            try {
+                const example = currentExamples[modelName];
+                const exampleObj = typeof example === 'string' ? JSON.parse(example) : example;
+                exampleEditor.setValue(JSON.stringify(exampleObj, null, 2));
+                console.log(`Exemple affiché pour ${modelName}:`, exampleObj);
+            } catch (error) {
+                console.error(`Erreur lors de l'affichage de l'exemple pour ${modelName}:`, error);
+                exampleEditor.setValue(JSON.stringify({
+                    error: "Impossible de générer un exemple", 
+                    details: String(error),
+                    model: modelName
+                }, null, 2));
+            }
+        }
+        
+        // Écouteur d'événements pour le sélecteur de modèles
+        document.getElementById("model-select").addEventListener("change", function() {
+            updateExampleDisplay(this.value);
+        });
+        
+        // Écouteurs d'événements
+        document.getElementById("example-select").addEventListener("change", function() {
+            const example = this.value;
+            if (example && examples[example]) {
+                inputEditor.setValue(examples[example]);
+            }
+        });
+        
+        const generateBtn = document.getElementById("generate-btn");
+        const status = document.getElementById("status");
+        
+        generateBtn.addEventListener("click", async function() {
+            generateBtn.disabled = true;
+            status.textContent = "Génération du JSON Schema...";
+            status.className = "loading";
+            status.classList.remove("hidden");
+            
+            try {
+                // Attendre que Pyodide soit prêt (s'il est en cours de chargement)
+                await pyodideReadyPromise;
+                
+                // Générer le JSON Schema
+                const pydanticModel = inputEditor.getValue();
+                
+                // Exécuter le code Python avec Pyodide pour générer le JSON Schema
+                const result = await window.pyodide.runPythonAsync(`
+import json
+from io import StringIO
+import sys
+import random
+from datetime import datetime, date
+from uuid import uuid4
+
+# Rediriger stderr pour capturer les erreurs
+old_stderr = sys.stderr
+sys.stderr = mystderr = StringIO()
+
+try:
+    # Exécuter le code du modèle Pydantic
+    namespace = {}
+    exec("""${pydanticModel.replace(/\\/g, "\\\\").replace(/\`/g, "\\`").replace(/\$/g, "\\$")}""", namespace)
+    
+    # Trouver les classes qui héritent de BaseModel
+    models = {}
+    examples = {}
+    
+    # Fonction pour générer des exemples en fonction du type
+    def generate_example_value(field_type, field_info):
+        if field_type == 'integer' or field_type == 'number':
+            if 'exclusiveMinimum' in field_info:
+                min_val = field_info['exclusiveMinimum'] + 1
+            elif 'minimum' in field_info:
+                min_val = field_info['minimum']
+            else:
+                min_val = 1
+                
+            if 'exclusiveMaximum' in field_info:
+                max_val = field_info['exclusiveMaximum'] - 1
+            elif 'maximum' in field_info:
+                max_val = field_info['maximum']
+            else:
+                max_val = 100
+                
+            return random.randint(min_val, max_val)
+        elif field_type == 'string':
+            if 'format' in field_info:
+                if field_info['format'] == 'email':
+                    return 'user@example.com'
+                elif field_info['format'] == 'date-time':
+                    return datetime.now().isoformat()
+                elif field_info['format'] == 'date':
+                    return date.today().isoformat()
+                elif field_info['format'] == 'uuid':
+                    return str(uuid4())
+            
+            title = field_info.get('title', 'Example').lower()
+            if 'email' in title:
+                return 'user@example.com'
+            elif 'name' in title:
+                return 'John Doe'
+            elif 'password' in title:
+                return 'password123'
+            elif 'city' in title:
+                return 'New York'
+            elif 'country' in title:
+                return 'USA'
+            elif 'street' in title:
+                return '123 Main St'
+            elif 'postal' in title or 'zip' in title:
+                return '10001'
+            else:
+                # Générer une chaîne aléatoire en fonction des contraintes
+                min_length = field_info.get('minLength', 5)
+                max_length = field_info.get('maxLength', 10)
+                length = min(max(min_length, 5), max_length)
+                return 'example_' + ''.join(random.choice('abcdefghijklmnopqrstuvwxyz') for _ in range(length - 8))
+        elif field_type == 'boolean':
+            return random.choice([True, False])
+        elif field_type == 'array':
+            items = field_info.get('items', {})
+            item_type = items.get('type', 'string')
+            # Générer 1 à 2 éléments pour l'exemple
+            return [generate_example_value(item_type, items) for _ in range(random.randint(1, 2))]
+        elif field_type == 'object':
+            if 'properties' in field_info:
+                obj = {}
+                for prop_name, prop_info in field_info['properties'].items():
+                    obj[prop_name] = generate_example_value(prop_info.get('type', 'string'), prop_info)
+                return obj
+            return {}
+        else:
+            return None
+            
+    # Fonction pour générer un exemple pour un modèle donné
+    def generate_model_example(schema):
+        example = {}
+        if 'properties' in schema:
+            required_fields = schema.get('required', [])
+            for prop_name, prop_info in schema['properties'].items():
+                # Générer uniquement pour les champs requis ou avec une probabilité de 80% pour les autres
+                if prop_name in required_fields or random.random() < 0.8:
+                    prop_type = prop_info.get('type', 'string')
+                    example[prop_name] = generate_example_value(prop_type, prop_info)
+        return example
+    
+    model_classes = []
+    for name, obj in namespace.items():
+        if isinstance(obj, type) and hasattr(obj, 'schema_json') and callable(obj.schema_json):
+            # Ignorer la classe BaseModel elle-même
+            if name == 'BaseModel':
+                continue
+                
+            model_classes.append((name, obj))
+    
+    # Trier les modèles pour mettre les plus intéressants en premier (ceux avec plus de propriétés)
+    for name, obj in model_classes:
+        schema_json = obj.schema_json(indent=2)
+        # Vérifier que le schema_json est valide
+        try:
+            schema = json.loads(schema_json)
+            models[name] = schema_json
+            
+            # Générer un exemple d'instance basé sur le schéma
+            example = generate_model_example(schema)
+            examples[name] = example
+            
+            print(f"Modèle: {name}, Exemple généré: {json.dumps(example)}")
+        except Exception as e:
+            print(f"Erreur lors de la validation du schema pour {name}: {str(e)}")
+    
+    if not models:
+        raise ValueError("Aucun modèle Pydantic trouvé dans le code.")
+    
+    result = json.dumps({"schemas": models, "examples": examples})
+except Exception as e:
+    # Capturer l'erreur
+    error_msg = str(e)
+    error_detail = mystderr.getvalue()
+    result = json.dumps({"error": error_msg, "detail": error_detail})
+finally:
+    # Restaurer stderr
+    sys.stderr = old_stderr
+
+result
+                `);
+                
+                // S'assurer que le résultat est une chaîne valide avant de le parser
+                if (typeof result !== 'string') {
+                    throw new Error("Le résultat de Pyodide n'est pas une chaîne de caractères valide");
+                }
+                
+                const parsedResult = JSON.parse(result);
+                
+                // Vérifier s'il y a une erreur
+                if (parsedResult.error) {
+                    throw new Error(`${parsedResult.error}\n${parsedResult.detail}`);
+                }
+                
+                // Formater et afficher les schémas JSON
+                let formattedSchemas = {};
+                
+                if (parsedResult.schemas) {
+                    for (const [modelName, schema] of Object.entries(parsedResult.schemas)) {
+                        try {
+                            if (typeof schema === 'string') {
+                                formattedSchemas[modelName] = JSON.parse(schema);
+                            } else {
+                                formattedSchemas[modelName] = schema;
+                            }
+                        } catch (parseError) {
+                            console.error(`Erreur lors du parsing du schéma pour ${modelName}:`, parseError);
+                            console.log("Schéma brut:", schema);
+                            formattedSchemas[modelName] = { 
+                                error: `Erreur de parsing: ${parseError.message}`,
+                                raw: schema
+                            };
+                        }
+                    }
+                    
+                    outputEditor.setValue(JSON.stringify(formattedSchemas, null, 2));
+                    
+                    // Mettre à jour les exemples courants
+                    currentExamples = parsedResult.examples || {};
+                    
+                    // Mettre à jour le sélecteur de modèles
+                    const modelSelect = document.getElementById("model-select");
+                    // Effacer les options existantes sauf la première
+                    while (modelSelect.options.length > 1) {
+                        modelSelect.remove(1);
+                    }
+                    
+                    // Trier les modèles (BaseModel en dernier)
+                    const modelNames = Object.keys(parsedResult.examples || {}).sort((a, b) => {
+                        if (a === 'BaseModel') return 1;
+                        if (b === 'BaseModel') return -1;
+                        return a.localeCompare(b);
+                    });
+                    
+                    // Ajouter les options pour chaque modèle
+                    modelNames.forEach(modelName => {
+                        const option = document.createElement("option");
+                        option.value = modelName;
+                        option.text = modelName;
+                        modelSelect.add(option);
+                    });
+                    
+                    // Sélectionner le premier modèle par défaut (s'il existe)
+                    if (modelNames.length > 0) {
+                        modelSelect.value = modelNames[0];
+                        updateExampleDisplay(modelNames[0]);
+                    } else {
+                        exampleEditor.setValue(JSON.stringify({message: "Aucun exemple disponible pour ce modèle"}, null, 2));
+                    }
+                } else {
+                    // Format de l'ancien code pour compatibilité
+                    for (const [modelName, schema] of Object.entries(parsedResult)) {
+                        try {
+                            if (typeof schema === 'string') {
+                                formattedSchemas[modelName] = JSON.parse(schema);
+                            } else {
+                                formattedSchemas[modelName] = schema;
+                            }
+                        } catch (parseError) {
+                            console.error(`Erreur lors du parsing du schéma pour ${modelName}:`, parseError);
+                            console.log("Schéma brut:", schema);
+                            formattedSchemas[modelName] = { 
+                                error: `Erreur de parsing: ${parseError.message}`,
+                                raw: schema
+                            };
+                        }
+                    }
+                    
+                    outputEditor.setValue(JSON.stringify(formattedSchemas, null, 2));
+                    exampleEditor.setValue(JSON.stringify({message: "Aucun exemple disponible pour ce modèle"}, null, 2));
+                }
+                
+                status.textContent = "JSON Schema généré avec succès !";
+                status.className = "success";
+            } catch (error) {
+                console.error(error);
+                outputEditor.setValue("");
+                status.textContent = `Erreur: ${error.message}`;
+                status.className = "error";
+            } finally {
+                generateBtn.disabled = false;
+            }
+        });
+    </script>
+</body>
+</html>
